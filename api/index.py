@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from openai import OpenAI
-import os
+import json
 
 app = FastAPI()
 client = OpenAI()
@@ -13,38 +13,36 @@ class SentimentResponse(BaseModel):
     sentiment: str
     rating: int
 
+SYSTEM_PROMPT = """
+You are a sentiment analysis engine.
+Return ONLY valid JSON in this exact format:
+
+{
+  "sentiment": "positive" | "negative" | "neutral",
+  "rating": 1-5
+}
+
+No extra text. No explanations.
+"""
+
 @app.post("/comment", response_model=SentimentResponse)
 def analyze_comment(payload: CommentRequest):
     try:
-        response = client.responses.parse(
+        response = client.responses.create(
             model="gpt-4.1-mini",
             input=[
-                {"role": "system", "content": "Analyze sentiment and return JSON only."},
+                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": payload.comment}
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "sentiment_analysis",
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "sentiment": {
-                                "type": "string",
-                                "enum": ["positive", "negative", "neutral"]
-                            },
-                            "rating": {
-                                "type": "integer",
-                                "minimum": 1,
-                                "maximum": 5
-                            }
-                        },
-                        "required": ["sentiment", "rating"],
-                        "additionalProperties": False
-                    }
-                }
-            }
+            ]
         )
-        return response.output_parsed
+
+        raw = response.output_text
+        data = json.loads(raw)
+
+        return SentimentResponse(**data)
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Model did not return valid JSON")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
